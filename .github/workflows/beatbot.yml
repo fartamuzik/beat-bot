@@ -1,0 +1,80 @@
+name: beat-bot
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # бот просыпается каждые 10 минут
+  workflow_dispatch:         # можно запустить вручную кнопкой Run workflow
+
+permissions:
+  contents: write
+
+concurrency:
+  group: beat-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Есть новые биты?
+        id: check
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          OWNER_ID: ${{ secrets.OWNER_ID }}
+        run: python3 bot.py check
+
+      - name: Python
+        if: steps.check.outputs.has_work == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ffmpeg и библиотеки
+        if: steps.check.outputs.has_work == 'true'
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg > /dev/null
+          fi
+          sudo apt-get install -y -qq fonts-dejavu-core > /dev/null || true
+          pip install -q numpy pillow opencv-python-headless
+
+      - name: Шрифты из кэша
+        if: steps.check.outputs.has_work == 'true'
+        uses: actions/cache@v4
+        with:
+          path: fonts
+          key: fonts-v1
+
+      - name: Кэш поиска фонов
+        if: steps.check.outputs.has_work == 'true'
+        uses: actions/cache@v4
+        with:
+          path: pxcache
+          key: pxcache-${{ github.run_id }}
+          restore-keys: pxcache-
+
+      - name: Делаем видео
+        if: steps.check.outputs.has_work == 'true'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          OWNER_ID: ${{ secrets.OWNER_ID }}
+          PRODUCER_NAME: ${{ secrets.PRODUCER_NAME }}
+        run: python bot.py run
+
+      - name: Не даём GitHub выключить расписание
+        if: github.event_name == 'schedule'
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( (now - last) / 86400 )) -ge 45 ]; then
+            git config user.name "beat-bot"
+            git config user.email "beat-bot@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive"
+            git push
+          fi
