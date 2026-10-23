@@ -1,12 +1,15 @@
 name: beat-bot
 
+# Бот дежурит сменами по ~5,5 часа и сам запускает следующую смену.
+# Расписание — запасной вариант: если смена почему-то оборвалась, новая начнётся в течение получаса.
 on:
   schedule:
-    - cron: "*/10 * * * *"   # бот просыпается каждые 10 минут
-  workflow_dispatch:         # можно запустить вручную кнопкой Run workflow
+    - cron: "11,41 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: beat-bot
@@ -15,25 +18,16 @@ concurrency:
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
-      - name: Есть новые биты?
-        id: check
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          OWNER_ID: ${{ secrets.OWNER_ID }}
-        run: python3 bot.py check
-
       - name: Python
-        if: steps.check.outputs.has_work == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: ffmpeg и библиотеки
-        if: steps.check.outputs.has_work == 'true'
         run: |
           if ! command -v ffmpeg >/dev/null; then
             sudo apt-get update -qq
@@ -43,32 +37,31 @@ jobs:
           pip install -q numpy pillow opencv-python-headless
 
       - name: Шрифты из кэша
-        if: steps.check.outputs.has_work == 'true'
         uses: actions/cache@v4
         with:
           path: fonts
-          key: fonts-v1
+          key: fonts-v2
 
       - name: Кэш поиска фонов
-        if: steps.check.outputs.has_work == 'true'
         uses: actions/cache@v4
         with:
           path: pxcache
           key: pxcache-${{ github.run_id }}
           restore-keys: pxcache-
 
-      - name: Делаем видео
-        if: steps.check.outputs.has_work == 'true'
+      - name: Бот на связи
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           OWNER_ID: ${{ secrets.OWNER_ID }}
           PRODUCER_NAME: ${{ secrets.PRODUCER_NAME }}
-        run: python bot.py run
+          GH_TOKEN: ${{ github.token }}
+          LISTEN_MIN: "320"
+        run: python bot.py serve
 
-      - name: Не даём GitHub выключить расписание
-        if: github.event_name == 'schedule'
+      - name: Не даём GitHub выключить бота
+        if: always()
         run: |
           last=$(git log -1 --format=%ct)
           now=$(date +%s)
@@ -78,3 +71,5 @@ jobs:
             git commit --allow-empty -m "keepalive"
             git push
           fi
+
+        
